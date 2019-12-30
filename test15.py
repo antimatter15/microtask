@@ -1,5 +1,6 @@
 import Quartz
 import AppKit
+import Foundation
 import asyncio
 import json
 from aiohttp import web
@@ -32,28 +33,29 @@ async def screenshot_transmitter(ws, state):
             theRect, 
             Quartz.kCGWindowListOptionIncludingWindow, 
             WID, 
-            Quartz.kCGWindowImageDefault);
+            Quartz.kCGWindowImageShouldBeOpaque | Quartz.kCGWindowImageNominalResolution);
         bitmapRep = Quartz.NSBitmapImageRep.alloc().initWithCGImage_(theImage)
-        pngData = bitmapRep.representationUsingType_properties_(Quartz.NSPNGFileType, None)
-        await ws.send_bytes(pngData.bytes())
-        pngData.autorelease()
+        
+        jpegSettings = Foundation.NSDictionary({
+            "NSImageCompressionFactor": 0.5
+        })
+        jpegData = bitmapRep.representationUsingType_properties_(Quartz.NSJPEGFileType, jpegSettings)
+        await ws.send_bytes(jpegData.bytes())
+        jpegData.autorelease()
+        jpegSettings.autorelease()
+        
+        # pngData = bitmapRep.representationUsingType_properties_(Quartz.NSPNGFileType, None)
+        # await ws.send_bytes(pngData.bytes())
+        # pngData.autorelease()
         bitmapRep.autorelease()
-        await asyncio.sleep(0.5)
 
+        for i in range(10):
+            if state['send_now']:
+                print('fastpath')
+                state['send_now'] = False
+                continue
+            await asyncio.sleep(0.05)
 
-# async def main_handler(ws, win):
-#     await ws.send_str(repr(win))
-
-
-#     async for msg in ws:
-#         if msg.type == aiohttp.WSMsgType.TEXT:
-#             if msg.data == 'close':
-#                 await ws.close()
-#             else:
-#                 await ws.send_str(msg.data + '/answer')
-#         elif msg.type == aiohttp.WSMsgType.ERROR:
-#             print('ws connection closed with exception %s' %
-#                   ws.exception())
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
@@ -62,7 +64,8 @@ async def websocket_handler(request):
     wl1 = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
 
     state = {
-        'wid': None
+        'wid': None,
+        'send_now': False
     }
 
     for x in list(windowList(wl1)):
@@ -119,6 +122,7 @@ async def websocket_handler(request):
                 print(customEvent.description())
                 Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
                 customEvent.autorelease()
+                state['send_now'] = True
 
             elif data['type'] == 'mouse_up':
                 WID = state['wid']
@@ -140,37 +144,145 @@ async def websocket_handler(request):
                 )
                 Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
                 customEvent.autorelease()
+                state['send_now'] = True
+            elif data['type'] == 'key_down':
+                if data['key'] in US_keyboard:
+                    WID = state['wid']
+                    win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+                    key_down = Quartz.CGEventCreateKeyboardEvent(None, US_keyboard[data['key']], True)
+                    Quartz.CGEventPostToPid(win['pid'], key_down)
+                    state['send_now'] = True
+
+            elif data['type'] == 'key_up':
+                if data['key'] in US_keyboard:
+                    WID = state['wid']
+                    win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+                    key_up = Quartz.CGEventCreateKeyboardEvent(None, US_keyboard[data['key']], False)
+                    Quartz.CGEventPostToPid(win['pid'], key_up)
+                    # Quartz.CFRelease(key_up)
+                    state['send_now'] = True
 
         elif msg.type == aiohttp.WSMsgType.ERROR:
-            print('ws connection closed with exception %s' %
-                  ws.exception())
+            print('ws connection closed with exception %s' % ws.exception())
+            task1.cancel()
+        else:
+            print(msg)
 
-    # t1 = asyncio.create_task(screenshot_transmitter(ws, state))
-    # t2 = asyncio.create_task(main_handler(ws, state))
-
-    # await asyncio.wait([t1, t2])
 
     await task1
 
     
-
-    # while True:
-    #     # await ws.send_str(msg.data + '/answer')
-    #     await ws.send_str(datetime.datetime.utcnow().isoformat())
-    #     await asyncio.sleep(2)
-
-
     print('websocket connection closed')
     return ws
 
+US_keyboard = {
+    # Letters
+    'a': 0,
+    'b': 11,
+    'c': 8,
+    'd': 2,
+    'e': 14,
+    'f': 3,
+    'g': 5,
+    'h': 4,
+    'i': 34,
+    'j': 38,
+    'k': 40,
+    'l': 37,
+    'm': 46,
+    'n': 45,
+    'o': 31,
+    'p': 35,
+    'q': 12,
+    'r': 15,
+    's': 1,
+    't': 17,
+    'u': 32,
+    'v': 9,
+    'w': 13,
+    'x': 7,
+    'y': 16,
+    'z': 6,
 
+    # Numbers
+    '0': 29,
+    '1': 18,
+    '2': 19,
+    '3': 20,
+    '4': 21,
+    '5': 23,
+    '6': 22,
+    '7': 26,
+    '8': 28,
+    '9': 25,
+
+    # Symbols
+    '!': 18,
+    '@': 19,
+    '#': 20,
+    '$': 21,
+    '%': 23,
+    '^': 22,
+    '&': 26,
+    '*': 28,
+    '(': 25,
+    ')': 29,
+    '-': 27,  # Dash
+    '_': 27,  # Underscore
+    '=': 24,
+    '+': 24,
+    '`': 50,  # Backtick
+    '~': 50,
+    '[': 33,
+    ']': 30,
+    '{': 33,
+    '}': 30,
+    ';': 41,
+    ':': 41,
+    "'": 39,
+    '"': 39,
+    ',': 43,
+    '<': 43,
+    '.': 47,
+    '>': 47,
+    '/': 44,
+    '?': 44,
+    '\\': 42,
+    '|': 42,  # Pipe
+    # TAB: 48,  # Tab: Shift-Tab sent for Tab
+    # SPACE: 49,
+    ' ': 49,  # Space
+
+    'Enter': 36,
+
+    # RETURN: 36,
+    # DELETE: 117,
+    # TAB: 48,
+    # SPACE: 49,
+    # ESCAPE: 53,
+    # CAPS_LOCK: 57,
+    # NUM_LOCK: 71,
+    # SCROLL_LOCK: 107,
+    # PAUSE: 113,
+    # BACKSPACE: 51,
+    # INSERT: 114,
+    'Backspace': 51,
+
+    # # Cursor movement
+    'ArrowUp': 126,
+    'ArrowDown': 125,
+    'ArrowLeft': 123,
+    'ArrowRight': 124,
+    # PAGE_UP: 116,
+    # PAGE_DOWN: 121,
+}
 
 async def hello(request):
     return web.Response(content_type='text/html', text="""
         <body>
         <style>
             #portal {
-                width: 800px;
+                width: 1200px;
                 display: block;
             }
         </style>
@@ -220,6 +332,22 @@ async def hello(request):
                     type: 'mouse_up', 
                     x: (e.clientX - bb.x) / bb.width, 
                     y: (e.clientY - bb.y) / bb.height
+                })
+            }
+
+            window.onkeydown = e => {
+                e.preventDefault()
+                send({
+                    type: 'key_down', 
+                    key: e.key
+                })
+            }
+
+            window.onkeyup = e => {
+                e.preventDefault()
+                send({
+                    type: 'key_up', 
+                    key: e.key
                 })
             }
             
