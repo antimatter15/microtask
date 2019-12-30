@@ -1,8 +1,9 @@
 import Quartz
 import AppKit
 import asyncio
+import json
 from aiohttp import web
-
+import aiohttp
 
 
 def windowList(wl):
@@ -16,9 +17,16 @@ def windowList(wl):
         }
 
 
-async def screenshot_transmitter(ws, win):
+async def screenshot_transmitter(ws, state):
     while True:
-        WID = win['wid']
+        WID = state['wid']
+
+        if WID is None:
+            await asyncio.sleep(0.1)
+            continue
+
+        win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+
         theRect = Quartz.NSMakeRect(*win['bounds'])
         theImage = Quartz.CGWindowListCreateImage(
             theRect, 
@@ -30,22 +38,22 @@ async def screenshot_transmitter(ws, win):
         await ws.send_bytes(pngData.bytes())
         pngData.autorelease()
         bitmapRep.autorelease()
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
 
 
-async def main_handler(ws, win):
-    await ws.send_str(repr(win))
+# async def main_handler(ws, win):
+#     await ws.send_str(repr(win))
 
 
-    async for msg in ws:
-        if msg.type == aiohttp.WSMsgType.TEXT:
-            if msg.data == 'close':
-                await ws.close()
-            else:
-                await ws.send_str(msg.data + '/answer')
-        elif msg.type == aiohttp.WSMsgType.ERROR:
-            print('ws connection closed with exception %s' %
-                  ws.exception())
+#     async for msg in ws:
+#         if msg.type == aiohttp.WSMsgType.TEXT:
+#             if msg.data == 'close':
+#                 await ws.close()
+#             else:
+#                 await ws.send_str(msg.data + '/answer')
+#         elif msg.type == aiohttp.WSMsgType.ERROR:
+#             print('ws connection closed with exception %s' %
+#                   ws.exception())
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
@@ -53,22 +61,93 @@ async def websocket_handler(request):
 
     wl1 = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
 
-    win = None
+    state = {
+        'wid': None
+    }
+
     for x in list(windowList(wl1)):
-        if not (x['owner'] and 'Sublime' in x['owner']):
-            continue
-        win = x
+        await ws.send_json({
+            'type': 'add_option',
+            'text': x['owner'] + ' - ' + x['name'],
+            'value': x['wid'],
+        })
 
-    t1 = asyncio.create_task(screenshot_transmitter(ws, win))
-    t2 = asyncio.create_task(main_handler(ws, win))
 
-    await asyncio.wait([t1, t2])
+    task1 = asyncio.create_task(screenshot_transmitter(ws, state))
+
+    async for msg in ws:
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            data = json.loads(msg.data)
+
+            print(data)
+            if data['type'] == 'set_window':
+                state['wid'] = int(data['wid'])
+
+            elif data['type'] == 'mouse_move':
+                WID = state['wid']
+                win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+                x, y, w, h = win['bounds']
+                point = Quartz.CGPointMake(x + w * data['x'], y + h * data['y'])
+                print(point)
+
+                moveEvent = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft)
+                Quartz.CGEventSetType(moveEvent, Quartz.kCGEventMouseMoved)
+                Quartz.CGEventPostToPid(win['pid'], moveEvent)
+                moveEvent.autorelease()
+
+            elif data['type'] == 'mouse_down':
+                WID = state['wid']
+                win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+                x, y, w, h = win['bounds']
+                point = Quartz.CGPointMake(w * data['x'], 310 + h * (1-data['y']))
+                print(point)
+                customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
+                    Quartz.NSEventTypeLeftMouseDown, 
+                    point, 
+                    0,
+                    AppKit.NSDate.timeIntervalSinceReferenceDate(), 
+                    WID, 
+                    None, 
+                    0, 
+                    1, 
+                    0
+                )
+                print(customEvent.description())
+                Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
+                customEvent.autorelease()
+
+            elif data['type'] == 'mouse_up':
+                WID = state['wid']
+                win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+                x, y, w, h = win['bounds']
+                point = Quartz.CGPointMake(w * data['x'], 310 + h * (1-data['y']))
+                print(point)
+                customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
+                    Quartz.NSEventTypeLeftMouseUp, 
+                    point, 
+                    0,
+                    AppKit.NSDate.timeIntervalSinceReferenceDate(), 
+                    WID, 
+                    None, 
+                    0, 
+                    1, 
+                    0
+                )
+                Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
+                customEvent.autorelease()
+
+        elif msg.type == aiohttp.WSMsgType.ERROR:
+            print('ws connection closed with exception %s' %
+                  ws.exception())
+
+    # t1 = asyncio.create_task(screenshot_transmitter(ws, state))
+    # t2 = asyncio.create_task(main_handler(ws, state))
+
+    # await asyncio.wait([t1, t2])
+
+    await task1
 
     
-        
-
-        
-
 
     # while True:
     #     # await ws.send_str(msg.data + '/answer')
@@ -87,26 +166,76 @@ async def hello(request):
         <style>
             #portal {
                 width: 800px;
+                display: block;
             }
         </style>
+        <select id="options">
+            <option disabled selected>Select a window</option>
+        </select>
         <img id="portal">
+        
         <script>
-            var ws = new WebSocket('ws://' + location.host + '/ws'),
-                messages = document.createElement('ul');
+            var ws = new WebSocket('ws://' + location.host + '/ws');
+
+            function send(x){
+                console.log(x)
+                ws.send(JSON.stringify(x))
+            }
+
+            document.getElementById('options').onchange = e => {
+                send({ type: 'set_window', wid: e.target.value })
+            }
+
+            const portal = document.getElementById('portal');
+
+            portal.onmousemove = e => {
+                let bb = portal.getBoundingClientRect()
+                /*send({
+                    type: 'mouse_move', 
+                    x: (e.clientX - bb.x) / bb.width, 
+                    y: (e.clientY - bb.y) / bb.height
+                })*/
+            }
+
+            portal.onmousedown = e => {
+                e.preventDefault()
+                let bb = portal.getBoundingClientRect()
+                send({
+                    type: 'mouse_down', 
+                    x: (e.clientX - bb.x) / bb.width, 
+                    y: (e.clientY - bb.y) / bb.height
+                })
+            }
+
+            portal.onmouseup = e => {
+                e.preventDefault()
+                let bb = portal.getBoundingClientRect()
+                send({
+                    type: 'mouse_up', 
+                    x: (e.clientX - bb.x) / bb.width, 
+                    y: (e.clientY - bb.y) / bb.height
+                })
+            }
+            
+            ws.onclose = () => {
+                document.body.innerHTML = "Please refresh the page (Socket closed)"
+            }
+
             ws.onmessage = function (event) {
-                console.log(event)
                 if(event.data instanceof Blob){
-                    document.getElementById('portal').src = URL.createObjectURL(event.data)
-                }else{
-                var messages = document.getElementsByTagName('ul')[0],
-                    message = document.createElement('li');
-                    let content = document.createTextNode(event.data)
-                    message.appendChild(content);
-                    messages.appendChild(message);
+                    portal.src = URL.createObjectURL(event.data)
+                    return;
                 }
+
+                let data = JSON.parse(event.data);
+                console.log(data)
+                
+                if(data.type === 'add_option'){
+                    document.getElementById('options').appendChild(new Option(data.text, data.value))
+                }
+
                 
             };
-            document.body.appendChild(messages);
         </script></body>
     """)
 
