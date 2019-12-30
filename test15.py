@@ -99,8 +99,12 @@ async def websocket_handler(request):
                 WID = state['wid']
                 win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
                 x, y, w, h = win['bounds']
-                point = Quartz.CGPointMake(w * data['x'], 310 + h * (1-data['y']))
-                print(point)
+                # https://github.com/ThePacielloGroup/CCA-OSX/blob/master/Colour%20Contrast%20Analyser/CCAPickerController.swift#L85
+                # //Because AppKit and CoreGraphics use different coordinat systems
+
+                screenHeight = Quartz.NSScreen.mainScreen().frame().size.height
+                point = Quartz.CGPointMake(w * data['x'], screenHeight - h * (data['y']))
+                print(win['bounds'], point)
                 customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
                     Quartz.NSEventTypeLeftMouseDown, 
                     point, 
@@ -120,7 +124,8 @@ async def websocket_handler(request):
                 WID = state['wid']
                 win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
                 x, y, w, h = win['bounds']
-                point = Quartz.CGPointMake(w * data['x'], 310 + h * (1-data['y']))
+                screenHeight = Quartz.NSScreen.mainScreen().frame().size.height
+                point = Quartz.CGPointMake(w * data['x'], screenHeight - h * (data['y']))
                 print(point)
                 customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
                     Quartz.NSEventTypeLeftMouseUp, 
@@ -183,6 +188,7 @@ async def hello(request):
             }
 
             document.getElementById('options').onchange = e => {
+                location.hash = '#' + e.target.value
                 send({ type: 'set_window', wid: e.target.value })
             }
 
@@ -190,11 +196,11 @@ async def hello(request):
 
             portal.onmousemove = e => {
                 let bb = portal.getBoundingClientRect()
-                /*send({
+                send({
                     type: 'mouse_move', 
                     x: (e.clientX - bb.x) / bb.width, 
                     y: (e.clientY - bb.y) / bb.height
-                })*/
+                })
             }
 
             portal.onmousedown = e => {
@@ -232,6 +238,11 @@ async def hello(request):
                 
                 if(data.type === 'add_option'){
                     document.getElementById('options').appendChild(new Option(data.text, data.value))
+                    
+                    if('#' + data.value === location.hash){
+                        document.getElementById('options').value = data.value;
+                        send({ type: 'set_window', wid: data.value })
+                    }
                 }
 
                 
