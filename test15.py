@@ -5,7 +5,8 @@ import asyncio
 import json
 from aiohttp import web
 import aiohttp
-
+import Cocoa
+import objc
 
 def windowList(wl):
     for v in wl:
@@ -19,35 +20,45 @@ def windowList(wl):
 
 
 async def screenshot_transmitter(ws, state):
+    jpegSettings = Foundation.NSDictionary({
+        "NSImageCompressionFactor": 0.5
+    })
     while True:
-        WID = state['wid']
+        with objc.autorelease_pool():
+            WID = state['wid']
 
-        if WID is None:
-            await asyncio.sleep(0.1)
-            continue
+            if WID is None:
+                await asyncio.sleep(0.1)
+                continue
 
-        win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
+            win = get_win(state)
+            theRect = Quartz.NSMakeRect(*win['bounds'])
+            theImage = Quartz.CGWindowListCreateImage(
+                theRect, 
+                Quartz.kCGWindowListOptionIncludingWindow, 
+                WID, 
+                Quartz.kCGWindowImageShouldBeOpaque | Quartz.kCGWindowImageNominalResolution);
+            bitmapRep = Quartz.NSBitmapImageRep.alloc().initWithCGImage_(theImage)
+            
+            jpegData = bitmapRep.representationUsingType_properties_(Quartz.NSJPEGFileType, jpegSettings)
+            await ws.send_bytes(jpegData.bytes())
 
-        theRect = Quartz.NSMakeRect(*win['bounds'])
-        theImage = Quartz.CGWindowListCreateImage(
-            theRect, 
-            Quartz.kCGWindowListOptionIncludingWindow, 
-            WID, 
-            Quartz.kCGWindowImageShouldBeOpaque | Quartz.kCGWindowImageNominalResolution);
-        bitmapRep = Quartz.NSBitmapImageRep.alloc().initWithCGImage_(theImage)
-        
-        jpegSettings = Foundation.NSDictionary({
-            "NSImageCompressionFactor": 0.5
-        })
-        jpegData = bitmapRep.representationUsingType_properties_(Quartz.NSJPEGFileType, jpegSettings)
-        await ws.send_bytes(jpegData.bytes())
-        jpegData.autorelease()
-        jpegSettings.autorelease()
-        
+        # del jpegData
+        # del bitmapRep
+        # del theImage
+        # del theRect
+        # Quartz.CFRelease(jpegData)
+        # Quartz.CFRelease(bitmapRep)
+        # Quartz.CFRelease(theImage)
+        # Quartz.CFRelease(theRect)
+        # jpegData.release()
+        # jpegSettings.release()
+
         # pngData = bitmapRep.representationUsingType_properties_(Quartz.NSPNGFileType, None)
         # await ws.send_bytes(pngData.bytes())
-        # pngData.autorelease()
-        bitmapRep.autorelease()
+        # pngData.release()
+        # bitmapRep.release()
+        # theImage.release()
 
         for i in range(10):
             if state['send_now']:
@@ -56,24 +67,37 @@ async def screenshot_transmitter(ws, state):
                 continue
             await asyncio.sleep(0.05)
 
+    Quartz.CFRelease(jpegSettings)
+    print('DONE TRANSMITTING')
+
+
+
+def get_win(state):
+    WID = state['wid']
+    arr = Quartz.CGWindowListCreateDescriptionFromArray([WID])
+    win = list(windowList(arr))[0]
+    # arr.release()
+    return win
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    wl1 = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+    
 
     state = {
         'wid': None,
         'send_now': False
     }
 
-    for x in list(windowList(wl1)):
-        await ws.send_json({
-            'type': 'add_option',
-            'text': x['owner'] + ' - ' + x['name'],
-            'value': x['wid'],
-        })
+    with objc.autorelease_pool():
+        wl1 = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+        for x in list(windowList(wl1)):
+            await ws.send_json({
+                'type': 'add_option',
+                'text': x['owner'] + ' - ' + x['name'],
+                'value': x['wid'],
+            })
 
 
     task1 = asyncio.create_task(screenshot_transmitter(ws, state))
@@ -87,80 +111,97 @@ async def websocket_handler(request):
                 state['wid'] = int(data['wid'])
 
             elif data['type'] == 'mouse_move':
-                WID = state['wid']
-                win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
-                x, y, w, h = win['bounds']
-                point = Quartz.CGPointMake(x + w * data['x'], y + h * data['y'])
-                print(point)
+                with objc.autorelease_pool():
+                    win = get_win(state)
+                    x, y, w, h = win['bounds']
+                    point = Quartz.CGPointMake(x + w * data['x'], y + h * data['y'])
+                    print(point)
 
-                moveEvent = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft)
-                Quartz.CGEventSetType(moveEvent, Quartz.kCGEventMouseMoved)
-                Quartz.CGEventPostToPid(win['pid'], moveEvent)
-                moveEvent.autorelease()
+                    moveEvent = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft)
+                    Quartz.CGEventSetType(moveEvent, Quartz.kCGEventMouseMoved)
+                    Quartz.CGEventPostToPid(win['pid'], moveEvent)
+
+            elif data['type'] == 'mouse_wheel':
+                with objc.autorelease_pool():
+                    win = get_win(state)
+
+                    event = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitPixel, 2, data['deltaY'], data['deltaX']);
+                    Quartz.CGEventSetType(event, Quartz.kCGEventScrollWheel)
+                    
+                    # CGEventSetIntegerValueField(*event, kCGMouseEventDeltaX, deltaX);
+                    # CGEventSetIntegerValueField(*event, kCGMouseEventDeltaY, deltaY);
+
+                    Quartz.CGEventPostToPid(win['pid'], event)
+                    # event.release()
+                    # state['send_now'] = True
 
             elif data['type'] == 'mouse_down':
-                WID = state['wid']
-                win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
-                x, y, w, h = win['bounds']
-                # https://github.com/ThePacielloGroup/CCA-OSX/blob/master/Colour%20Contrast%20Analyser/CCAPickerController.swift#L85
-                # //Because AppKit and CoreGraphics use different coordinat systems
+                with objc.autorelease_pool():
+                    win = get_win(state)
+                    x, y, w, h = win['bounds']
+                    # https://github.com/ThePacielloGroup/CCA-OSX/blob/master/Colour%20Contrast%20Analyser/CCAPickerController.swift#L85
+                    # Because AppKit and CoreGraphics use different coordinate systems
 
-                screenHeight = Quartz.NSScreen.mainScreen().frame().size.height
-                point = Quartz.CGPointMake(w * data['x'], screenHeight - h * (data['y']))
-                print(win['bounds'], point)
-                customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
-                    Quartz.NSEventTypeLeftMouseDown, 
-                    point, 
-                    0,
-                    AppKit.NSDate.timeIntervalSinceReferenceDate(), 
-                    WID, 
-                    None, 
-                    0, 
-                    1, 
-                    0
-                )
-                print(customEvent.description())
-                Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
-                customEvent.autorelease()
-                state['send_now'] = True
+                    screenHeight = Quartz.NSScreen.mainScreen().frame().size.height
+                    point = Quartz.CGPointMake(w * data['x'], screenHeight - h * (data['y']))
+                    customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
+                        Quartz.NSEventTypeLeftMouseDown, 
+                        point, 
+                        0,
+                        AppKit.NSDate.timeIntervalSinceReferenceDate(), 
+                        win['wid'], 
+                        None, 
+                        0, 
+                        1, 
+                        0
+                    )
+                    print(customEvent.description())
+                    Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
+                    # customEvent.release()
+                    state['send_now'] = True
+
+
 
             elif data['type'] == 'mouse_up':
-                WID = state['wid']
-                win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
-                x, y, w, h = win['bounds']
-                screenHeight = Quartz.NSScreen.mainScreen().frame().size.height
-                point = Quartz.CGPointMake(w * data['x'], screenHeight - h * (data['y']))
-                print(point)
-                customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
-                    Quartz.NSEventTypeLeftMouseUp, 
-                    point, 
-                    0,
-                    AppKit.NSDate.timeIntervalSinceReferenceDate(), 
-                    WID, 
-                    None, 
-                    0, 
-                    1, 
-                    0
-                )
-                Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
-                customEvent.autorelease()
-                state['send_now'] = True
-            elif data['type'] == 'key_down':
-                if data['key'] in US_keyboard:
-                    WID = state['wid']
-                    win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
-                    key_down = Quartz.CGEventCreateKeyboardEvent(None, US_keyboard[data['key']], True)
-                    Quartz.CGEventPostToPid(win['pid'], key_down)
+                with objc.autorelease_pool():
+                    win = get_win(state)
+                    x, y, w, h = win['bounds']
+                    screenHeight = Quartz.NSScreen.mainScreen().frame().size.height
+                    point = Quartz.CGPointMake(w * data['x'], screenHeight - h * (data['y']))
+                    print(point)
+                    customEvent = Quartz.NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
+                        Quartz.NSEventTypeLeftMouseUp, 
+                        point, 
+                        0,
+                        AppKit.NSDate.timeIntervalSinceReferenceDate(), 
+                        win['wid'], 
+                        None, 
+                        0, 
+                        1, 
+                        0
+                    )
+                    Quartz.CGEventPostToPid(win['pid'], customEvent.CGEvent())
+                
                     state['send_now'] = True
+            elif data['type'] == 'key_down':
+                with objc.autorelease_pool():
+                    if data['key'] in US_keyboard:
+                        win = get_win(state)
+                        key_down = Quartz.CGEventCreateKeyboardEvent(None, US_keyboard[data['key']], True)
+                        Quartz.CGEventPostToPid(win['pid'], key_down)
+                        # key_down.release()
+                        state['send_now'] = True
 
             elif data['type'] == 'key_up':
-                if data['key'] in US_keyboard:
-                    WID = state['wid']
-                    win = list(windowList(Quartz.CGWindowListCreateDescriptionFromArray([WID])))[0]
-                    key_up = Quartz.CGEventCreateKeyboardEvent(None, US_keyboard[data['key']], False)
-                    Quartz.CGEventPostToPid(win['pid'], key_up)
-                    # Quartz.CFRelease(key_up)
-                    state['send_now'] = True
+                with objc.autorelease_pool():
+                    if data['key'] in US_keyboard:
+                        win = get_win(state)
+
+                        key_up = Quartz.CGEventCreateKeyboardEvent(None, US_keyboard[data['key']], False)
+                        Quartz.CGEventPostToPid(win['pid'], key_up)
+                        # Quartz.CFRelease(key_up)
+                        # key_up.release()
+                        state['send_now'] = True
 
         elif msg.type == aiohttp.WSMsgType.ERROR:
             print('ws connection closed with exception %s' % ws.exception())
@@ -342,6 +383,16 @@ async def hello(request):
                     key: e.key
                 })
             }
+
+            document.addEventListener('mousewheel', e => {
+                e.preventDefault()
+                send({
+                    'type': 'mouse_wheel',
+                    deltaY: e.deltaY,
+                    deltaX: e.deltaX
+                })
+            }, {passive: false});
+
 
             window.onkeyup = e => {
                 e.preventDefault()
