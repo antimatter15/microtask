@@ -5,45 +5,17 @@ let peer = new SimplePeer({
     initiator: true,
 })
 
-var port = chrome.runtime.connect({})
-
-port.onMessage.addListener(function(data) {
-    if (data.type === 'signal') {
-        peer.signal(data.data)
-    }
-})
-
 peer.on('signal', data => {
-    port.postMessage({ type: 'signal', data: data })
+    console.log('got signal', data)
+    chrome.runtime.sendMessage({ type: 'signal', data: data })
 })
 
 function send(data) {
-    peer.write(
-        JSON.stringify({
-            type: 'relay',
-            payload: data,
-        })
-    )
+    peer.write(JSON.stringify(data))
 }
 
 peer.on('connect', () => {
     console.log('connected')
-
-    send({
-        type: 'init',
-    })
-})
-
-let pageWidth = 0,
-    pageHeight = 0
-
-peer.on('data', function(chunk) {
-    let data = JSON.parse(chunk)
-    if (data.type === 'resize') {
-        pageWidth = data.width
-        pageHeight = data.height
-        updateViewport()
-    }
 })
 
 function throttle(fn) {
@@ -54,34 +26,45 @@ function throttle(fn) {
     }
 }
 
-// function sendViewport() {
-//     console.log('resizing')
-//     send({
-//         type: 'resize',
-//         width: container.offsetWidth,
-//         height: container.offsetHeight,
-//         deviceScaleFactor: devicePixelRatio,
-//     })
+function sendViewport() {
+    console.log('resizing')
+    send({
+        type: 'resize',
+        width: container.offsetWidth,
+        height: container.offsetHeight,
+        deviceScaleFactor: devicePixelRatio,
+    })
 
-// }
+    const containerAspectRatio = container.offsetWidth / container.offsetHeight
+    const videoAspectRatio = monitor.videoWidth / monitor.videoHeight
+    const videoScale = containerAspectRatio / videoAspectRatio
+
+    if (videoAspectRatio > containerAspectRatio) {
+        // we will have letterboxes on the side
+
+        monitor.style.height = container.offsetHeight + 'px'
+        monitor.style.width = 'auto'
+        monitor.style.marginLeft =
+            Math.round((-container.offsetWidth * (1 / videoScale - 1)) / 2) + 'px'
+        monitor.style.marginTop = '0px'
+    } else {
+        // we will have letterboxes on the top
+        monitor.style.height = 'auto'
+        monitor.style.width = container.offsetWidth + 'px'
+        monitor.style.marginLeft = '0px'
+        monitor.style.marginTop =
+            Math.round((-container.offsetHeight * (videoScale - 1)) / 2) + 'px'
+    }
+}
 
 container.onmousemove = e => {
     e.preventDefault()
     const bb = container.getBoundingClientRect()
-
-    const containerAspectRatio = container.offsetWidth / container.offsetHeight
-    const pageAspectRatio = pageWidth / pageHeight
-
-    const scale =
-        containerAspectRatio > pageAspectRatio
-            ? pageHeight / container.offsetHeight
-            : pageWidth / container.offsetWidth
-
     send({
         type: 'mouse',
         eventType: 'mouseMoved',
-        x: (e.clientX - bb.x) * scale,
-        y: (e.clientY - bb.y) * scale,
+        x: e.clientX - bb.x,
+        y: e.clientY - bb.y,
     })
 }
 
@@ -170,6 +153,15 @@ window.onkeydown = window.onkeyup = window.onkeypress = event => {
     })
 }
 
+window.onresize = throttle(() => sendViewport())
+
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+    if (request.type === 'signal') {
+        peer.signal(request.data)
+    }
+    // console.log(sender.tab ? 'from a content script:' + sender.tab.url : 'from the extension')
+})
+
 peer.on('stream', stream => {
     if ('srcObject' in monitor) {
         monitor.srcObject = stream
@@ -177,53 +169,6 @@ peer.on('stream', stream => {
         monitor.src = window.URL.createObjectURL(stream) // for older browsers
     }
     monitor.play()
-
+    sendViewport()
     console.log(monitor.videoWidth, monitor.videoHeight)
 })
-
-monitor.addEventListener('loadedmetadata', event => {
-    updateViewport()
-})
-
-window.onresize = throttle(() => updateViewport())
-
-function updateViewport() {
-    if (pageWidth === 0 || pageHeight === 0) return
-    if (monitor.videoWidth === 0 || monitor.videoHeight === 0) return
-
-    const containerAspectRatio = container.offsetWidth / container.offsetHeight
-    const videoAspectRatio = monitor.videoWidth / monitor.videoHeight
-    const pageAspectRatio = pageWidth / pageHeight
-    const videoScale = pageAspectRatio / videoAspectRatio
-
-    console.log(containerAspectRatio, pageAspectRatio, videoAspectRatio)
-
-    let horizontalScale = 1
-    let verticalScale = 1
-
-    if (videoAspectRatio > pageAspectRatio) {
-        // horizontal letterbox
-        horizontalScale = 1 / videoScale
-        console.log('video letterbox horizontal', horizontalScale)
-    } else {
-        console.log('video letterbox vertical', videoScale)
-        verticalScale = videoScale
-    }
-
-    if (containerAspectRatio > pageAspectRatio) {
-        // fill the page height
-        monitor.style.height = Math.round(verticalScale * container.offsetHeight) + 'px'
-        monitor.style.width = 'auto'
-        // monitor.style.marginTop = '0px'
-    } else {
-        // fill the page width
-        monitor.style.width = Math.round(horizontalScale * container.offsetWidth) + 'px'
-        monitor.style.height = 'auto'
-    }
-
-    monitor.style.marginTop =
-        Math.round(Math.min(0, ((1 / videoScale - 1) * monitor.offsetHeight) / 2)) + 'px'
-
-    monitor.style.marginLeft =
-        Math.round(Math.min(0, ((videoScale - 1) * monitor.offsetWidth) / 2)) + 'px'
-}

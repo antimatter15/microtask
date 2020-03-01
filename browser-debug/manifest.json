@@ -17,6 +17,6 @@
         "persistent": false,
         "scripts": ["lib/chrome-extension-async.js", "lib/simplepeer.min.js", "background.js"]
     },
-    "permissions": ["tabs", "tabCapture", "activeTab", "<all_urls>"],
+    "permissions": ["tabs", "tabCapture", "activeTab", "debugger"],
     "web_accessible_resources": ["icon.png"]
 }

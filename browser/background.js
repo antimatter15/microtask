@@ -1,7 +1,4 @@
 chrome.browserAction.onClicked.addListener(async function(tab) {
-    await chrome.tabs.executeScript(tab.id, {
-        file: 'controller.js',
-    })
     let stream = await chrome.tabCapture.capture({
         audio: false,
         video: true,
@@ -18,104 +15,113 @@ chrome.browserAction.onClicked.addListener(async function(tab) {
     //     pinned: true,
     // })
 
-    onTabActivate(tab.id, function() {
-        chrome.tabs.update(monitor.id, {
-            active: true,
+    // onTabActivate(tab.id, function() {
+    //     chrome.tabs.update(monitor.id, {
+    //         active: true,
+    //     })
+    // })
+
+    let port
+    let peer
+
+    onTabPort(tab.id, function(newPort) {
+        if (port) port.disconnect()
+        port = newPort
+
+        port.onMessage.addListener(function(data) {
+            if (data.type === 'relay') {
+                peer.write(JSON.stringify(data.payload))
+            }
         })
     })
 
-    // let response = await chrome.tabs.sendMessage(tab.id, { greeting: 'hello' })
-    console.log('created monitor')
-    let debugId = {
-        tabId: tab.id,
+    function installContentScript() {
+        chrome.tabs.executeScript(tab.id, {
+            file: 'lib/syn.js',
+        })
+        chrome.tabs.executeScript(tab.id, {
+            file: 'controller.js',
+        })
     }
-    await chrome.debugger.attach(debugId, '1.2')
-
-    let peer = new SimplePeer({
-        initiator: false,
-        stream: stream,
+    // re-run content script when tab reloads
+    onTabLoad(tab.id, function() {
+        installContentScript()
     })
 
-    peer.on('signal', data => {
-        chrome.tabs.sendMessage(monitor.id, {
-            type: 'signal',
-            data: data,
+    onTabPort(monitor.id, function(monitorPort) {
+        // re-run content script when monitor reloads
+        installContentScript()
+
+        peer = new SimplePeer({
+            initiator: false,
+            stream: stream,
         })
-    })
 
-    peer.on('data', function(chunk) {
-        let data = JSON.parse(chunk)
-        console.log('got a chunk', chunk)
-        if (data.type === 'resize') {
-            chrome.debugger.sendCommand(debugId, 'Emulation.setDeviceMetricsOverride', {
-                width: data.width,
-                height: data.height,
-                deviceScaleFactor: data.deviceScaleFactor,
-                mobile: false,
-                scale: 1,
-                fitWindow: true,
+        peer.on('signal', data => {
+            monitorPort.postMessage({
+                type: 'signal',
+                data: data,
             })
-        } else if (data.type === 'mouse') {
-            chrome.debugger.sendCommand(debugId, 'Input.dispatchMouseEvent', {
-                type: data.eventType,
-                x: data.x,
-                y: data.y,
-                modifiers: data.modifiers,
-                button: data.button,
-                buttons: data.buttons,
-                deltaX: data.deltaX,
-                deltaY: data.deltaY,
-                clickCount: data.clickCount,
-            })
-        } else if (data.type === 'keyboard') {
-            chrome.debugger.sendCommand(debugId, 'Input.dispatchKeyEvent', {
-                type: data.eventType,
+        })
 
-                modifiers: data.modifiers,
-                text: data.text,
-                unmodifiedText: data.unmodifiedText,
-                keyIdentifier: data.keyIdentifier,
-                code: data.code,
-                key: data.key,
-                windowsVirtualKeyCode: data.windowsVirtualKeyCode,
-                nativeVirtualKeyCode: data.nativeVirtualKeyCode,
-                autoRepeat: data.autoRepeat,
-                isKeypad: data.isKeypad,
-                isSystemKey: data.isSystemKey,
-            })
-        }
-    })
+        peer.on('data', function(chunk) {
+            let data = JSON.parse(chunk)
 
-    peer.on('close', function() {
-        console.log('closing peer')
-    })
+            if (data.type === 'relay') {
+                port.postMessage(data.payload)
+            }
+        })
 
-    peer.on('connect', async function() {})
+        peer.on('close', function() {
+            console.log('closing peer')
+        })
 
-    onTabMessage(monitor.id, function(message, sender, sendResponse) {
-        console.log(message)
-        if (message.type === 'signal') {
-            peer.signal(message.data)
-        }
+        peer.on('connect', async function() {
+            console.log('peer connected')
+        })
+
+        monitorPort.onMessage.addListener(function(data) {
+            if (data.type === 'signal') {
+                peer.signal(data.data)
+            }
+        })
+
+        monitorPort.onDisconnect.addListener(function() {
+            peer.destroy()
+        })
     })
 
     onTabClose(monitor.id, function() {
-        chrome.debugger.detach(debugId)
-        stream.getVideoTracks()[0].stop()
+        for (let track of stream.getVideoTracks()) {
+            track.stop()
+        }
+        port.destroy()
     })
 })
 
-function onTabMessage(tabId, messageHandler) {
-    function onMessage(request, sender, sendResponse) {
-        if (sender.tab.id === tabId) {
-            messageHandler(request, sender, sendResponse)
+function onTabPort(tabId, portHandler) {
+    function onPort(port) {
+        if (port.sender.tab.id === tabId) {
+            portHandler(port)
         }
     }
-    chrome.runtime.onMessage.addListener(onMessage)
+    chrome.runtime.onConnect.addListener(onPort)
     onTabClose(tabId, function() {
-        chrome.runtime.onMessage.removeListener(onMessage)
+        chrome.runtime.onConnect.removeListener(onMessage)
     })
 }
+
+// function onTabMessage(tabId, messageHandler) {
+//     function onMessage(request, sender, sendResponse) {
+//         if (sender.tab.id === tabId) {
+//             messageHandler(request, sender, sendResponse)
+//         }
+//     }
+//     chrome.runtime.onMessage.addListener(onMessage)
+//     onTabClose(tabId, function() {
+//         chrome.runtime.onMessage.removeListener(onMessage)
+//     })
+// }
 
 function onTabClose(tabId, handler) {
     function removeListener(removedTabId) {
@@ -135,5 +141,17 @@ function onTabActivate(tabId, onActive) {
     chrome.tabs.onActivated.addListener(activeListener)
     onTabClose(tabId, function() {
         chrome.tabs.onActivated.removeListener(activeListener)
+    })
+}
+
+function onTabLoad(tabId, onLoad) {
+    function onTabUpdate(updatedTabId, changeInfo, tab) {
+        if (updatedTabId === tabId && changeInfo.status === 'complete') {
+            onLoad(tab)
+        }
+    }
+    chrome.tabs.onUpdated.addListener(onTabUpdate)
+    onTabClose(tabId, function() {
+        chrome.tabs.onUpdated.removeListener(onMessage)
     })
 }
