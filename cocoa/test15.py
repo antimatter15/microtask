@@ -43,29 +43,12 @@ async def screenshot_transmitter(ws, state):
             jpegData = bitmapRep.representationUsingType_properties_(Quartz.NSJPEGFileType, jpegSettings)
             await ws.send_bytes(jpegData.bytes())
 
-        # del jpegData
-        # del bitmapRep
-        # del theImage
-        # del theRect
-        # Quartz.CFRelease(jpegData)
-        # Quartz.CFRelease(bitmapRep)
-        # Quartz.CFRelease(theImage)
-        # Quartz.CFRelease(theRect)
-        # jpegData.release()
-        # jpegSettings.release()
-
-        # pngData = bitmapRep.representationUsingType_properties_(Quartz.NSPNGFileType, None)
-        # await ws.send_bytes(pngData.bytes())
-        # pngData.release()
-        # bitmapRep.release()
-        # theImage.release()
-
         for i in range(10):
             if state['send_now']:
                 print('fastpath')
                 state['send_now'] = False
                 continue
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.001)
 
     Quartz.CFRelease(jpegSettings)
     print('DONE TRANSMITTING')
@@ -290,8 +273,7 @@ US_keyboard = {
     '?': 44,
     '\\': 42,
     '|': 42,  # Pipe
-    # TAB: 48,  # Tab: Shift-Tab sent for Tab
-    # SPACE: 49,
+    'Tab': 48,  # Tab: Shift-Tab sent for Tab
     ' ': 49,  # Space
 
     'Enter': 36,
