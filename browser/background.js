@@ -36,9 +36,9 @@ chrome.browserAction.onClicked.addListener(async function(tab) {
     })
 
     function installContentScript() {
-        chrome.tabs.executeScript(tab.id, {
-            file: 'lib/syn.js',
-        })
+        // chrome.tabs.executeScript(tab.id, {
+        //     file: 'lib/syn.js',
+        // })
         chrome.tabs.executeScript(tab.id, {
             file: 'controller.js',
         })
@@ -49,8 +49,13 @@ chrome.browserAction.onClicked.addListener(async function(tab) {
     })
 
     onTabPort(monitor.id, function(monitorPort) {
-        // re-run content script when monitor reloads
-        installContentScript()
+        if (!peer) {
+            // install content script on page the first time
+            installContentScript()
+        } else {
+            // reload the page on subsequent reloads
+            chrome.tabs.reload(tab.id)
+        }
 
         peer = new SimplePeer({
             initiator: false,

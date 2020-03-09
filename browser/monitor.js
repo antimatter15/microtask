@@ -28,14 +28,12 @@ function send(data) {
 
 peer.on('connect', () => {
     console.log('connected')
-
-    send({
-        type: 'init',
-    })
 })
 
 let pageWidth = 0,
     pageHeight = 0
+
+let textSelection
 
 peer.on('data', function(chunk) {
     let data = JSON.parse(chunk)
@@ -43,6 +41,11 @@ peer.on('data', function(chunk) {
         pageWidth = data.width
         pageHeight = data.height
         updateViewport()
+    } else if (data.type === 'update') {
+        container.style.cursor = data.cursor
+        textSelection = data.selection
+
+        // console.log(data)
     }
 })
 
@@ -65,8 +68,7 @@ function throttle(fn) {
 
 // }
 
-container.onmousemove = e => {
-    e.preventDefault()
+function serializeMouseEvent(e) {
     const bb = container.getBoundingClientRect()
 
     const containerAspectRatio = container.offsetWidth / container.offsetHeight
@@ -77,12 +79,37 @@ container.onmousemove = e => {
             ? pageHeight / container.offsetHeight
             : pageWidth / container.offsetWidth
 
-    send({
-        type: 'mouse',
-        eventType: 'mouseMoved',
-        x: (e.clientX - bb.x) * scale,
-        y: (e.clientY - bb.y) * scale,
-    })
+    return {
+        clientX: (e.clientX - bb.x) * scale,
+        clientY: (e.clientY - bb.y) * scale,
+
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+
+        button: e.button,
+        buttons: e.buttons,
+
+        detail: e.detail,
+    }
+}
+
+document.addEventListener('copy', function(e) {
+    console.log('copied')
+    e.clipboardData.setData('text/plain', textSelection)
+    e.preventDefault()
+})
+
+document.addEventListener('paste', function(e) {
+    let text = e.clipboardData.getData('text/plain')
+
+    e.preventDefault()
+})
+
+container.onmousemove = e => {
+    e.preventDefault()
+    send({ type: 'mousemove', ...serializeMouseEvent(e) })
 }
 
 container.oncontextmenu = e => {
@@ -91,84 +118,55 @@ container.oncontextmenu = e => {
 
 container.onmousedown = e => {
     e.preventDefault()
-    const bb = container.getBoundingClientRect()
-    const buttons = { 0: 'none', 1: 'left', 2: 'middle', 3: 'right' }
-    send({
-        type: 'mouse',
-        eventType: 'mousePressed',
-        button: buttons[e.which],
-        buttons: e.which,
-        modifiers:
-            (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0),
-        x: e.clientX - bb.x,
-        y: e.clientY - bb.y,
-        clickCount: 1,
-    })
+    send({ type: 'mousedown', ...serializeMouseEvent(e) })
 }
 
 container.onmouseup = e => {
     e.preventDefault()
-    const bb = container.getBoundingClientRect()
-    const buttons = { 0: 'none', 1: 'left', 2: 'middle', 3: 'right' }
-    send({
-        type: 'mouse',
-        eventType: 'mouseReleased',
-        buttons: e.which,
-        modifiers:
-            (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0),
-        button: buttons[e.which],
-        x: e.clientX - bb.x,
-        y: e.clientY - bb.y,
-        clickCount: 1,
-    })
+    send({ type: 'mouseup', ...serializeMouseEvent(e) })
 }
 
 document.addEventListener(
-    'mousewheel',
+    'wheel',
     e => {
         e.preventDefault()
-        console.log(e.deltaX)
+
         send({
-            type: 'mouse',
-            eventType: 'mouseWheel',
-            modifiers:
-                (e.altKey ? 1 : 0) |
-                (e.ctrlKey ? 2 : 0) |
-                (e.metaKey ? 4 : 0) |
-                (e.shiftKey ? 8 : 0),
-            x: 0,
-            y: 0,
+            type: 'wheel',
+            ...serializeMouseEvent(e),
             deltaX: e.deltaX,
             deltaY: e.deltaY,
+            deltaZ: e.deltaZ,
+            deltaMode: e.deltaMode,
         })
     },
     { passive: false }
 )
 
-window.onkeydown = window.onkeyup = window.onkeypress = event => {
-    const eventTypes = { keydown: 'keyDown', keyup: 'keyUp', keypress: 'char' }
-    const text = event.type === 'keypress' ? String.fromCharCode(event.charCode) : undefined
+// window.onkeydown = window.onkeyup = window.onkeypress = event => {
+//     const eventTypes = { keydown: 'keyDown', keyup: 'keyUp', keypress: 'char' }
+//     const text = event.type === 'keypress' ? String.fromCharCode(event.charCode) : undefined
 
-    send({
-        type: 'keyboard',
-        eventType: eventTypes[event.type],
-        modifiers:
-            (event.altKey ? 1 : 0) |
-            (event.ctrlKey ? 2 : 0) |
-            (event.metaKey ? 4 : 0) |
-            (event.shiftKey ? 8 : 0),
-        text: text,
-        unmodifiedText: text ? text.toLowerCase() : undefined,
-        keyIdentifier: event.keyIdentifier,
-        code: event.code,
-        key: event.key,
-        windowsVirtualKeyCode: event.keyCode,
-        nativeVirtualKeyCode: event.keyCode,
-        autoRepeat: false,
-        isKeypad: false,
-        isSystemKey: false,
-    })
-}
+//     send({
+//         type: 'keyboard',
+//         eventType: eventTypes[event.type],
+//         modifiers:
+//             (event.altKey ? 1 : 0) |
+//             (event.ctrlKey ? 2 : 0) |
+//             (event.metaKey ? 4 : 0) |
+//             (event.shiftKey ? 8 : 0),
+//         text: text,
+//         unmodifiedText: text ? text.toLowerCase() : undefined,
+//         keyIdentifier: event.keyIdentifier,
+//         code: event.code,
+//         key: event.key,
+//         windowsVirtualKeyCode: event.keyCode,
+//         nativeVirtualKeyCode: event.keyCode,
+//         autoRepeat: false,
+//         isKeypad: false,
+//         isSystemKey: false,
+//     })
+// }
 
 peer.on('stream', stream => {
     if ('srcObject' in monitor) {
@@ -177,8 +175,6 @@ peer.on('stream', stream => {
         monitor.src = window.URL.createObjectURL(stream) // for older browsers
     }
     monitor.play()
-
-    console.log(monitor.videoWidth, monitor.videoHeight)
 })
 
 monitor.addEventListener('loadedmetadata', event => {
@@ -196,25 +192,13 @@ function updateViewport() {
     const pageAspectRatio = pageWidth / pageHeight
     const videoScale = pageAspectRatio / videoAspectRatio
 
-    console.log(containerAspectRatio, pageAspectRatio, videoAspectRatio)
-
-    let horizontalScale = 1
-    let verticalScale = 1
-
-    if (videoAspectRatio > pageAspectRatio) {
-        // horizontal letterbox
-        horizontalScale = 1 / videoScale
-        console.log('video letterbox horizontal', horizontalScale)
-    } else {
-        console.log('video letterbox vertical', videoScale)
-        verticalScale = videoScale
-    }
+    let horizontalScale = videoAspectRatio > pageAspectRatio ? 1 / videoScale : 1
+    let verticalScale = videoAspectRatio > pageAspectRatio ? 1 : videoScale
 
     if (containerAspectRatio > pageAspectRatio) {
         // fill the page height
         monitor.style.height = Math.round(verticalScale * container.offsetHeight) + 'px'
         monitor.style.width = 'auto'
-        // monitor.style.marginTop = '0px'
     } else {
         // fill the page width
         monitor.style.width = Math.round(horizontalScale * container.offsetWidth) + 'px'
