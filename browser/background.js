@@ -1,6 +1,6 @@
 chrome.browserAction.onClicked.addListener(async function(tab) {
     let stream = await chrome.tabCapture.capture({
-        audio: false,
+        audio: true,
         video: true,
     })
 

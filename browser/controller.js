@@ -11,14 +11,14 @@ port.onDisconnect.addListener(function() {
     onDispose()
 })
 
-var nubbin = document.createElement('div')
-nubbin.style.position = 'fixed'
-nubbin.style.background = 'green'
-nubbin.style.width = '30px'
-nubbin.style.height = '30px'
-nubbin.style.borderRadius = '30px'
-nubbin.style.zIndex = '99999999999'
-document.body.appendChild(nubbin)
+// var nubbin = document.createElement('div')
+// nubbin.style.position = 'fixed'
+// nubbin.style.background = 'green'
+// nubbin.style.width = '30px'
+// nubbin.style.height = '30px'
+// nubbin.style.borderRadius = '30px'
+// nubbin.style.zIndex = '99999999999'
+// document.body.appendChild(nubbin)
 
 var style = document.createElement('style')
 document.head.appendChild(style)
@@ -127,7 +127,7 @@ onResize()
 
 var onDispose = function() {
     window.removeEventListener('resize', onResize)
-    document.body.removeChild(nubbin)
+    // document.body.removeChild(nubbin)
 }
 
 // function setFavicon(url) {
