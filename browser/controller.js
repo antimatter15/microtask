@@ -31,21 +31,25 @@ function send(data) {
 //     cursor: 'default'
 // }
 
-let mouseDownElement
+// let mouseDownElement
+let mouseDownPosition
 let clickCount = 1
 let lastClickTime = 0
 let textSelectionRangeStart
 
 function sendUpdate(el, data) {
-    let computedElementStyles = window.getComputedStyle(el)
-    let cursorValue = computedElementStyles.getPropertyValue('cursor')
-
-    let cursorTextRange = getRangeAtPoint(el, data.clientX, data.clientY)
+    let cursor
+    if (el && el !== window) {
+        let computedElementStyles = window.getComputedStyle(el)
+        let cursorValue = computedElementStyles.getPropertyValue('cursor')
+        let cursorTextRange = getRangeAtPoint(el, data.clientX, data.clientY)
+        cursor = cursorValue === 'auto' && cursorTextRange ? 'text' : cursorValue
+    }
 
     send({
         type: 'update',
-        cursor: cursorValue === 'auto' && cursorTextRange ? 'text' : cursorValue,
-        selection: window.getSelection().toString(),
+        cursor: cursor,
+        // selection: ,
     })
 }
 
@@ -59,11 +63,16 @@ function throttle(fn, delay = 500) {
 
 let sendThrottledUpdate = throttle(sendUpdate, 10)
 
+setInterval(() => {
+    simulateFocusStyles()
+}, 100)
+
 function onMessage(data) {
     if (data.type === 'mousemove') {
         let el = document.elementFromPoint(data.clientX, data.clientY)
 
         simulateMouseHoverStyles(el)
+        simulateFocusStyles()
 
         sendThrottledUpdate(el, data)
         // TODO: mouseover, mouseout, mouseenter, mouseleave
@@ -183,17 +192,37 @@ function onMessage(data) {
             relatedTarget: null,
         })
 
-        mouseDownElement = null
+        // mouseDownElement = null
+        mouseDownPosition = null
         if (el.dispatchEvent(mouseDownEvent)) {
-            mouseDownElement = el
+            // mouseDownElement = el
+            mouseDownPosition = [mouseDownEvent.clientX, mouseDownEvent.clientY]
+
+            document.activeElement.blur()
+            el.focus()
         }
 
         textSelectionRangeStart = getRangeAtPoint(el, data.clientX, data.clientY)
-        let sel = document.getSelection()
-        sel.removeAllRanges()
+        // let sel = document.getSelection()
+        // sel.removeAllRanges()
+        simulateFocusStyles()
     } else if (data.type === 'mouseup') {
         let el = document.elementFromPoint(data.clientX, data.clientY)
 
+        if (textSelectionRangeStart) {
+            let range = getRangeAtPoint(el, data.clientX, data.clientY)
+            if (range) {
+                let sel = document.getSelection()
+                sel.removeAllRanges()
+
+                sel.setBaseAndExtent(
+                    textSelectionRangeStart.startContainer,
+                    textSelectionRangeStart.startOffset,
+                    range.startContainer,
+                    range.startOffset
+                )
+            }
+        }
         textSelectionRangeStart = null
         if (Date.now() - lastClickTime > 500) clickCount = 0
         clickCount++
@@ -229,40 +258,56 @@ function onMessage(data) {
         if (!el.dispatchEvent(mouseUpEvent)) {
             // mouseUp was cancelled
         }
+
         // not a click if different element than mousedown
-        if (el !== mouseDownElement) {
+        if (
+            !(
+                Math.abs(mouseUpEvent.clientX - mouseDownPosition[0]) < 5 &&
+                Math.abs(mouseUpEvent.clientY - mouseDownPosition[1]) < 5
+            )
+        ) {
+            lastClickTime = 0
             return
         }
 
         if (eventArgs.detail === 2) {
             // select word
             let range = getRangeAtPoint(el, data.clientX, data.clientY)
-            let sel = document.getSelection()
-            sel.removeAllRanges()
-            sel.addRange(range)
-            console.log('range', range)
+            if (range) {
+                let sel = document.getSelection()
+                sel.removeAllRanges()
+                sel.addRange(range)
+                console.log('range', range)
 
-            sel.modify('move', 'backward', 'word')
-            sel.modify('extend', 'forward', 'word')
+                sel.modify('move', 'backward', 'word')
+                sel.modify('extend', 'forward', 'word')
+            }
         } else if (eventArgs.detail == 3) {
             // select paragraph
             let range = getRangeAtPoint(el, data.clientX, data.clientY)
-            let sel = document.getSelection()
-            sel.removeAllRanges()
-            sel.addRange(range)
-            sel.modify('extend', 'forward', 'paragraphboundary')
-            sel.modify('extend', 'backward', 'paragraphboundary')
+            if (range) {
+                let sel = document.getSelection()
+                sel.removeAllRanges()
+                sel.addRange(range)
+                sel.modify('extend', 'forward', 'paragraphboundary')
+                sel.modify('extend', 'backward', 'paragraphboundary')
+            }
         }
 
         let clickEvent = new MouseEvent('click', eventArgs)
         if (el.dispatchEvent(clickEvent)) {
         }
 
-        let dblClickEvent = new MouseEvent('dblclick', eventArgs)
-        if (el.dispatchEvent(dblClickEvent)) {
-            // double click was cancelled
+        if (eventArgs.detail === 2) {
+            let dblClickEvent = new MouseEvent('dblclick', eventArgs)
+            if (el.dispatchEvent(dblClickEvent)) {
+                // double click was cancelled
+            }
         }
+        simulateFocusStyles()
         sendThrottledUpdate(el, data)
+    } else if (data.type === 'copy') {
+        send({ type: 'copy', text: window.getSelection().toString() })
     }
 }
 
@@ -325,6 +370,24 @@ function cssPathToElement(el) {
     return names.join(' > ')
 }
 
+var focusInjector = document.createElement('style')
+document.head.appendChild(focusInjector)
+var focusInjectorSheet = focusInjector.sheet
+
+function simulateFocusStyles() {
+    while (focusInjectorSheet.cssRules.length > 0) {
+        focusInjectorSheet.deleteRule(0)
+    }
+
+    if (document.activeElement && document.activeElement.tabIndex > -1) {
+        focusInjectorSheet.addRule(
+            cssPathToElement(document.activeElement),
+            'outline: 2px solid #629cf4',
+            0
+        )
+    }
+}
+
 var mouseHoverInjector = document.createElement('style')
 document.head.appendChild(mouseHoverInjector)
 var injectorSheet = mouseHoverInjector.sheet
@@ -366,12 +429,8 @@ function getRangeAtPoint(elem, x, y) {
         while (currentPos + 1 < endPos) {
             range.setStart(elem, currentPos)
             range.setEnd(elem, currentPos + 1)
-            if (
-                range.getBoundingClientRect().left <= x &&
-                range.getBoundingClientRect().right >= x &&
-                range.getBoundingClientRect().top <= y &&
-                range.getBoundingClientRect().bottom >= y
-            ) {
+            let bb = range.getBoundingClientRect()
+            if (bb.left <= x && bb.right >= x && bb.top <= y && bb.bottom >= y) {
                 return range
             }
             currentPos += 1
@@ -380,13 +439,10 @@ function getRangeAtPoint(elem, x, y) {
         for (var i = 0; i < elem.childNodes.length; i++) {
             var range = elem.childNodes[i].ownerDocument.createRange()
             range.selectNodeContents(elem.childNodes[i])
-            if (
-                range.getBoundingClientRect().left <= x &&
-                range.getBoundingClientRect().right >= x &&
-                range.getBoundingClientRect().top <= y &&
-                range.getBoundingClientRect().bottom >= y
-            ) {
-                return getRangeAtPoint(elem.childNodes[i], x, y)
+            let bb = range.getBoundingClientRect()
+            if (bb.left <= x && bb.right >= x && bb.top <= y && bb.bottom >= y) {
+                let rp = getRangeAtPoint(elem.childNodes[i], x, y)
+                if (rp) return rp
             }
         }
     }

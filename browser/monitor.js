@@ -33,7 +33,7 @@ peer.on('connect', () => {
 let pageWidth = 0,
     pageHeight = 0
 
-let textSelection
+// let textSelection
 
 peer.on('data', function(chunk) {
     let data = JSON.parse(chunk)
@@ -43,9 +43,13 @@ peer.on('data', function(chunk) {
         updateViewport()
     } else if (data.type === 'update') {
         container.style.cursor = data.cursor
-        textSelection = data.selection
+        // textSelection = data.selection
 
         // console.log(data)
+    } else if (data.type === 'copy') {
+        navigator.clipboard.writeText(data.text).then(() => {
+            console.log('injected into clipbaord')
+        })
     }
 })
 
@@ -96,8 +100,8 @@ function serializeMouseEvent(e) {
 }
 
 document.addEventListener('copy', function(e) {
-    console.log('copied')
-    e.clipboardData.setData('text/plain', textSelection)
+    console.log('request selection')
+    send({ type: 'copy' })
     e.preventDefault()
 })
 
