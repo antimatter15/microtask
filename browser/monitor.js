@@ -147,6 +147,48 @@ document.addEventListener(
     { passive: false }
 )
 
+window.onkeydown = e => {
+    send({
+        type: 'keydown',
+        key: e.key,
+        code: e.code,
+        location: e.location,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        repeat: e.repeat,
+        keyCode: e.keyCode,
+        detail: e.detail,
+        charCode: e.charCode,
+        which: e.which,
+        isComposing: e.isComposing,
+    })
+}
+
+window.onkeypress = e => {
+    send({
+        type: 'keypress',
+        key: e.key,
+        code: e.code,
+        location: e.location,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        repeat: e.repeat,
+        keyCode: e.keyCode,
+        detail: e.detail,
+        charCode: e.charCode,
+        which: e.which,
+        isComposing: e.isComposing,
+    })
+}
+
+// window.onkeyup = e => {
+//     console.log(e)
+// }
+
 // window.onkeydown = window.onkeyup = window.onkeypress = event => {
 //     const eventTypes = { keydown: 'keyDown', keyup: 'keyUp', keypress: 'char' }
 //     const text = event.type === 'keypress' ? String.fromCharCode(event.charCode) : undefined

@@ -262,6 +262,7 @@ function onMessage(data) {
         // not a click if different element than mousedown
         if (
             !(
+                mouseDownPosition &&
                 Math.abs(mouseUpEvent.clientX - mouseDownPosition[0]) < 5 &&
                 Math.abs(mouseUpEvent.clientY - mouseDownPosition[1]) < 5
             )
@@ -308,6 +309,94 @@ function onMessage(data) {
         sendThrottledUpdate(el, data)
     } else if (data.type === 'copy') {
         send({ type: 'copy', text: window.getSelection().toString() })
+    } else if (data.type === 'keydown') {
+        let el = document.activeElement || document.body
+        while (el.tagName === 'IFRAME') {
+            el = el.contentDocument.activeElement
+        }
+
+        console.log(el)
+        let eventArgs = {
+            // EventInit https://developer.mozilla.org/en-US/docs/Web/API/Event/Event
+            bubbles: true,
+            cancelable: true,
+            composed: false,
+
+            // UIEvent: https://developer.mozilla.org/en-US/docs/Web/API/UIEvent/UIEvent
+            view: el.ownerDocument.defaultView,
+            detail: data.detail,
+
+            // KeyboardEvent: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/KeyboardEvent
+            key: data.key,
+            code: data.code,
+            location: data.location,
+            ctrlKey: data.ctrlKey,
+            shiftKey: data.shiftKey,
+            altKey: data.altKey,
+            metaKey: data.metaKey,
+            repeat: data.repeat,
+            keyCode: data.keyCode,
+            detail: data.detail,
+            charCode: data.charCode,
+            which: data.which,
+            isComposing: data.isComposing,
+        }
+
+        let keyDownEvent = new KeyboardEvent('keydown', eventArgs)
+        if (!el.dispatchEvent(keyDownEvent)) {
+            // keydown was cancelled
+        }
+
+        let beforeInputEvent = new KeyboardEvent('beforeinput', eventArgs)
+        if (!el.dispatchEvent(beforeInputEvent)) {
+            // keydown was cancelled
+        }
+
+        // TODO: change keyCode to the ascii lowercase/uppercase version
+        // also filter out modifier keys:
+        // https://developer.mozilla.org/en-US/docs/Web/API/Document/keypress_event
+
+        let inputEvent = new KeyboardEvent('input', eventArgs)
+        if (!el.dispatchEvent(inputEvent)) {
+            // keydown was cancelled
+        }
+    } else if (data.type === 'keypress') {
+        let el = document.activeElement || document.body
+        while (el.tagName === 'IFRAME') {
+            el = el.contentDocument.activeElement
+        }
+
+        console.log(el)
+        let eventArgs = {
+            // EventInit https://developer.mozilla.org/en-US/docs/Web/API/Event/Event
+            bubbles: true,
+            cancelable: true,
+            composed: false,
+
+            // UIEvent: https://developer.mozilla.org/en-US/docs/Web/API/UIEvent/UIEvent
+            view: el.ownerDocument.defaultView,
+            detail: data.detail,
+
+            // KeyboardEvent: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/KeyboardEvent
+            key: data.key,
+            code: data.code,
+            location: data.location,
+            ctrlKey: data.ctrlKey,
+            shiftKey: data.shiftKey,
+            altKey: data.altKey,
+            metaKey: data.metaKey,
+            repeat: data.repeat,
+            keyCode: data.keyCode,
+            detail: data.detail,
+            charCode: data.charCode,
+            which: data.which,
+            isComposing: data.isComposing,
+        }
+
+        let keyPressEvent = new KeyboardEvent('keypress', eventArgs)
+        if (!el.dispatchEvent(keyPressEvent)) {
+            // keydown was cancelled
+        }
     }
 }
 
