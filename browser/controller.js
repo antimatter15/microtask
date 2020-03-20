@@ -49,7 +49,7 @@ function sendUpdate(el, data) {
     send({
         type: 'update',
         cursor: cursor,
-        // selection: ,
+        // caret: caret,
     })
 }
 
@@ -79,7 +79,15 @@ function onMessage(data) {
 
         // https://stackoverflow.com/a/18730705/205784
 
-        if (textSelectionRangeStart) {
+        if (typeof textSelectionRangeStart === 'number') {
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                let caret = getCaretFromCoordinates(el, data.clientX, data.clientY)
+
+                el.selectionStart = Math.min(caret, textSelectionRangeStart)
+                el.selectionEnd = Math.max(caret, textSelectionRangeStart)
+                el.selectionDirection = caret > textSelectionRangeStart ? 'forward' : 'backward'
+            }
+        } else if (textSelectionRangeStart) {
             let range = getRangeAtPoint(el, data.clientX, data.clientY)
             if (range) {
                 let sel = document.getSelection()
@@ -202,14 +210,24 @@ function onMessage(data) {
             el.focus()
         }
 
-        textSelectionRangeStart = getRangeAtPoint(el, data.clientX, data.clientY)
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            computeCoordinateCache(el)
+            textSelectionRangeStart = getCaretFromCoordinates(el, data.clientX, data.clientY)
+            el.selectionStart = textSelectionRangeStart
+            el.selectionEnd = textSelectionRangeStart
+        } else {
+            textSelectionRangeStart = getRangeAtPoint(el, data.clientX, data.clientY)
+        }
+
         // let sel = document.getSelection()
         // sel.removeAllRanges()
         simulateFocusStyles()
     } else if (data.type === 'mouseup') {
         let el = document.elementFromPoint(data.clientX, data.clientY)
 
-        if (textSelectionRangeStart) {
+        if (typeof textSelectionRangeStart === 'number') {
+            // textSelectionRangeStart
+        } else if (textSelectionRangeStart) {
             let range = getRangeAtPoint(el, data.clientX, data.clientY)
             if (range) {
                 let sel = document.getSelection()
@@ -463,17 +481,36 @@ var focusInjector = document.createElement('style')
 document.head.appendChild(focusInjector)
 var focusInjectorSheet = focusInjector.sheet
 
+var virtualCaret = document.createElement('div')
+virtualCaret.style.position = 'fixed'
+virtualCaret.style.width = '1px'
+virtualCaret.style.background = 'black'
+virtualCaret.style.display = 'none'
+document.body.appendChild(virtualCaret)
+
 function simulateFocusStyles() {
     while (focusInjectorSheet.cssRules.length > 0) {
         focusInjectorSheet.deleteRule(0)
     }
 
-    if (document.activeElement && document.activeElement.tabIndex > -1) {
-        focusInjectorSheet.addRule(
-            cssPathToElement(document.activeElement),
-            'outline: 2px solid #629cf4',
-            0
-        )
+    let active = document.activeElement
+
+    virtualCaret.style.display = 'none'
+
+    if (active && active.tabIndex > -1) {
+        focusInjectorSheet.addRule(cssPathToElement(active), 'outline: 2px solid #629cf4', 0)
+
+        if (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') {
+            if (active.selectionStart === active.selectionEnd) {
+                let bb = active.getBoundingClientRect()
+                let caret = getCaretCoordinates(active, active.selectionStart)
+
+                virtualCaret.style.left = bb.left + caret.left + 'px'
+                virtualCaret.style.top = bb.top + caret.top + 'px'
+                virtualCaret.style.height = caret.height + 'px'
+                virtualCaret.style.display = 'block'
+            }
+        }
     }
 }
 
@@ -536,4 +573,184 @@ function getRangeAtPoint(elem, x, y) {
         }
     }
     return null
+}
+
+// We'll copy the properties below into the mirror div.
+// Note that some browsers, such as Firefox, do not concatenate properties
+// into their shorthand (e.g. padding-top, padding-bottom etc. -> padding),
+// so we have to list every single property explicitly.
+var textInputProperties = [
+    'direction', // RTL support
+    'boxSizing',
+    'width', // on Chrome and IE, exclude the scrollbar, so the mirror div wraps exactly as the textarea does
+    'height',
+    'overflowX',
+    'overflowY', // copy the scrollbar for IE
+
+    'borderTopWidth',
+    'borderRightWidth',
+    'borderBottomWidth',
+    'borderLeftWidth',
+    'borderStyle',
+
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+
+    // https://developer.mozilla.org/en-US/docs/Web/CSS/font
+    'fontStyle',
+    'fontVariant',
+    'fontWeight',
+    'fontStretch',
+    'fontSize',
+    'fontSizeAdjust',
+    'lineHeight',
+    'fontFamily',
+
+    'textAlign',
+    'textTransform',
+    'textIndent',
+    'textDecoration', // might not make a difference, but better be safe
+
+    'letterSpacing',
+    'wordSpacing',
+
+    'tabSize',
+    'MozTabSize',
+]
+
+// var isBrowser = typeof window !== 'undefined'
+// var isFirefox =
+
+let caretCoordinateCache = null
+function computeCoordinateCache(element) {
+    let cache = []
+    console.time('computeCoordinateCache')
+    let bb = element.getBoundingClientRect()
+    for (let i = 0; i < element.value.length; i++) {
+        let res = getCaretCoordinates(element, i)
+        cache.push({
+            x: bb.left + res.left,
+            y: bb.top + res.top + res.height / 2,
+        })
+    }
+    console.timeEnd('computeCoordinateCache')
+    caretCoordinateCache = cache
+}
+
+function getCaretFromCoordinates(element, clientX, clientY) {
+    function test(pos) {
+        let res = caretCoordinateCache[pos]
+        return Math.sqrt((res.x - clientX) ** 2 + (res.y - clientY) ** 2)
+    }
+
+    let minDistance = test(0),
+        minPos = 0
+    for (let i = 1; i < caretCoordinateCache.length; i++) {
+        let dist = test(i)
+        if (dist < minDistance) {
+            minPos = i
+            minDistance = dist
+        }
+    }
+    return minPos
+}
+
+function getCaretCoordinates(element, position, options) {
+    // if (!isBrowser) {
+    //     throw new Error(
+    //         'textarea-caret-position#getCaretCoordinates should only be called in a browser'
+    //     )
+    // }
+
+    var debug = (options && options.debug) || false
+    if (debug) {
+        var el = document.querySelector('#input-textarea-caret-position-mirror-div')
+        if (el) el.parentNode.removeChild(el)
+    }
+
+    // The mirror div will replicate the textarea's style
+    var div = document.createElement('div')
+    div.id = 'input-textarea-caret-position-mirror-div'
+    document.body.appendChild(div)
+
+    var style = div.style
+    var computed = window.getComputedStyle ? window.getComputedStyle(element) : element.currentStyle // currentStyle for IE < 9
+    var isInput = element.nodeName === 'INPUT'
+
+    // Default textarea styles
+    style.whiteSpace = 'pre-wrap'
+    if (!isInput) style.wordWrap = 'break-word' // only for textarea-s
+
+    // Position off-screen
+    style.position = 'absolute' // required to return coordinates properly
+    if (!debug) style.visibility = 'hidden' // not 'display: none' because we want rendering
+
+    // Transfer the element's properties to the div
+    textInputProperties.forEach(function(prop) {
+        if (isInput && prop === 'lineHeight') {
+            // Special case for <input>s because text is rendered centered and line height may be != height
+            if (computed.boxSizing === 'border-box') {
+                var height = parseInt(computed.height)
+                var outerHeight =
+                    parseInt(computed.paddingTop) +
+                    parseInt(computed.paddingBottom) +
+                    parseInt(computed.borderTopWidth) +
+                    parseInt(computed.borderBottomWidth)
+                var targetHeight = outerHeight + parseInt(computed.lineHeight)
+                if (height > targetHeight) {
+                    style.lineHeight = height - outerHeight + 'px'
+                } else if (height === targetHeight) {
+                    style.lineHeight = computed.lineHeight
+                } else {
+                    style.lineHeight = 0
+                }
+            } else {
+                style.lineHeight = computed.height
+            }
+        } else {
+            style[prop] = computed[prop]
+        }
+    })
+
+    if (window.mozInnerScreenX != null) {
+        // Firefox lies about the overflow property for textareas: https://bugzilla.mozilla.org/show_bug.cgi?id=984275
+        if (element.scrollHeight > parseInt(computed.height)) style.overflowY = 'scroll'
+    } else {
+        style.overflow = 'hidden' // for Chrome to not render a scrollbar; IE keeps overflowY = 'scroll'
+    }
+
+    div.textContent = element.value.substring(0, position)
+    // The second special handling for input type="text" vs textarea:
+    // spaces need to be replaced with non-breaking spaces - http://stackoverflow.com/a/13402035/1269037
+    if (isInput) div.textContent = div.textContent.replace(/\s/g, '\u00a0')
+
+    var span = document.createElement('span')
+
+    span.style.all = 'unset' // make sure everything is applied from the div, not from CSS selectors, not cross browser compatible :(
+    span.style.lineHeight = '1em' // set the line-height relative to the div
+
+    // Wrapping must be replicated *exactly*, including when a long word gets
+    // onto the next line, with whitespace at the end of the line before (#7).
+    // The  *only* reliable way to do that is to copy the *entire* rest of the
+    // textarea's content into the <span> created at the caret position.
+    // For inputs, just '.' would be enough, but no need to bother.
+    span.textContent = element.value.substring(position) || '.' // || because a completely empty faux span doesn't render at all
+    div.appendChild(span)
+
+    var coordinates = {
+        top: span.offsetTop + parseInt(computed['borderTopWidth']),
+        left: span.offsetLeft + parseInt(computed['borderLeftWidth']),
+        // height: parseInt(computed['lineHeight']),
+        height: parseInt(getComputedStyle(span).lineHeight), // get the pixelated line-height even if it is "normal"
+    }
+
+    if (debug) {
+        span.style.backgroundColor = '#aaa'
+    } else {
+        document.body.removeChild(div)
+    }
+
+    return coordinates
 }
