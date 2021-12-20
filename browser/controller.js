@@ -71,10 +71,12 @@ function onMessage(data) {
     if (data.type === 'mousemove') {
         let el = document.elementFromPoint(data.clientX, data.clientY)
 
-        simulateMouseHoverStyles(el)
+        
         simulateFocusStyles()
 
         sendThrottledUpdate(el, data)
+
+
         // TODO: mouseover, mouseout, mouseenter, mouseleave
 
         // https://stackoverflow.com/a/18730705/205784
@@ -101,6 +103,8 @@ function onMessage(data) {
                 )
             }
         }
+
+        simulateMouseHoverStyles(el)
     } else if (data.type === 'wheel') {
         let el = document.elementFromPoint(data.clientX, data.clientY)
 
@@ -518,9 +522,8 @@ var mouseHoverInjector = document.createElement('style')
 document.head.appendChild(mouseHoverInjector)
 var injectorSheet = mouseHoverInjector.sheet
 
-function simulateMouseHoverStyles(el) {
-    let ancestors = getAncestors(el)
 
+function generateMouseHoverStyles(){
     while (injectorSheet.cssRules.length > 0) {
         injectorSheet.deleteRule(0)
     }
@@ -535,15 +538,61 @@ function simulateMouseHoverStyles(el) {
         for (let rule of rules) {
             if (!rule.selectorText || !rule.cssText) continue
             if (rule.selectorText.includes(':hover')) {
-                let modifiedSelector = rule.selectorText.replace(/:hover/g, '')
-                for (let anc of ancestors) {
-                    if (anc && anc.matches && anc.matches(modifiedSelector)) {
-                        injectorSheet.addRule(cssPathToElement(anc), rule.style.cssText, 0)
-                    }
-                }
+                let modifiedSelector = rule.selectorText.replace(/:hover/g, '.fake-hover')
+                // let modifiedSelector = rule.selectorText.replace(/:hover/g, ':has(.fake-hover)')
+                injectorSheet.addRule(modifiedSelector, rule.style.cssText, 0)
             }
         }
     }
+}
+
+
+let lastGeneratedStyles = 0;
+function simulateMouseHoverStyles(el) {
+    if(Date.now() - lastGeneratedStyles > 10000){
+        generateMouseHoverStyles()
+        lastGeneratedStyles = Date.now()
+    }
+
+    // el.classList.add('fake-hover')
+    
+    let ancestors = getAncestors(el)
+    let existing = Array.from(document.querySelectorAll('.fake-hover'))
+
+    for(let el of existing){
+        if(!ancestors.includes(el)){
+            el.classList.remove('fake-hover')
+        }
+    }
+    for (let anc of ancestors) {
+        if(!existing.includes(anc)){
+            anc.classList.add('fake-hover')
+        }
+    }
+
+    // while (injectorSheet.cssRules.length > 0) {
+    //     injectorSheet.deleteRule(0)
+    // }
+
+    // for (let ss of document.styleSheets) {
+    //     let rules
+    //     try {
+    //         rules = ss.cssRules
+    //     } catch (err) {
+    //         continue
+    //     }
+    //     for (let rule of rules) {
+    //         if (!rule.selectorText || !rule.cssText) continue
+    //         if (rule.selectorText.includes(':hover')) {
+    //             let modifiedSelector = rule.selectorText.replace(/:hover/g, '')
+    //             for (let anc of ancestors) {
+    //                 if (anc && anc.matches && anc.matches(modifiedSelector)) {
+    //                     injectorSheet.addRule(cssPathToElement(anc), rule.style.cssText, 0)
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 function getRangeAtPoint(elem, x, y) {
