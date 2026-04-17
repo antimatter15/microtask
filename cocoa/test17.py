@@ -65,6 +65,25 @@ def find_ancestor_with_role(el, roles, max_depth=15):
     return None
 
 
+def find_scrollable_ancestor(el, max_depth=15):
+    """Walk up until we find an element that advertises scroll actions or
+    exposes a scroll bar attribute. Don't rely on role — Catalyst apps
+    expose scroll containers as plain AXGroup (not AXScrollArea) but with
+    AXScroll{Up,Down}ByPage actions + AXVerticalScrollBar."""
+    cur = el
+    for _ in range(max_depth):
+        if cur is None:
+            return None
+        acts = ax_actions(cur)
+        if any(a in acts for a in ('AXScrollDownByPage', 'AXScrollUpByPage',
+                                    'AXScrollLeftByPage', 'AXScrollRightByPage')):
+            return cur
+        if ax_get(cur, 'AXVerticalScrollBar') or ax_get(cur, 'AXHorizontalScrollBar'):
+            return cur
+        cur = ax_parent(cur)
+    return None
+
+
 def hit_test(app_ax, gx, gy):
     """Hit-test WITHIN a specific app's tree. Doing this system-wide would
     return whichever element is topmost visually — for a backgrounded
@@ -260,6 +279,14 @@ def to_global(win, nx, ny):
     return (x + w * nx, y + h * ny)
 
 
+def _is_settable(el, attr):
+    try:
+        err, ok = AS.AXUIElementIsAttributeSettable(el, attr, None)
+        return err == 0 and bool(ok)
+    except Exception:
+        return False
+
+
 def _classify(el):
     """Return (plan, role) if el is directly handleable, else (None, role)."""
     role = ax_get(el, 'AXRole') or ''
@@ -270,6 +297,11 @@ def _classify(el):
         return ('press', role)
     if role in AX_SELECTABLE_ROLES and 'AXPress' in actions:
         return ('select_press', role)
+    # Native AppKit tables (Day One, Mail, Finder sidebar) don't advertise
+    # AXPress on rows — their selection model uses AXSelectedRows on the
+    # enclosing table / AXSelected on the row. Detect and dispatch that.
+    if role == 'AXRow' and _is_settable(el, 'AXSelected'):
+        return ('select_row_attr', role)
     return (None, role)
 
 
@@ -314,23 +346,24 @@ def plan_click(el):
 
 
 def try_ax_scroll(el, dy, dx):
-    scroll = find_ancestor_with_role(el, AX_SCROLL_ROLES)
+    """Invoke AXScroll*ByPage actions on the nearest scrollable ancestor.
+    AX doesn't have pixel-granular scroll actions, so each non-zero wheel
+    event produces one page scroll. That's coarser than a real wheel but
+    it *does* scroll against Catalyst apps where CGEvent wheel is ignored."""
+    scroll = find_scrollable_ancestor(el)
     if scroll is None:
         return False
     actions = ax_actions(scroll)
-    # Pixel-scroll granularity doesn't exist in AX — best we can do is page
-    # actions. For small wheel deltas we prefer the CG fallback; AX only wins
-    # if dy/dx is "big enough" to feel like paging.
-    page = 80
-    if abs(dy) >= page:
+    did = False
+    if dy:
         act = 'AXScrollDownByPage' if dy > 0 else 'AXScrollUpByPage'
         if act in actions and AS.AXUIElementPerformAction(scroll, act) == 0:
-            return True
-    if abs(dx) >= page:
+            did = True
+    if dx:
         act = 'AXScrollRightByPage' if dx > 0 else 'AXScrollLeftByPage'
         if act in actions and AS.AXUIElementPerformAction(scroll, act) == 0:
-            return True
-    return False
+            did = True
+    return did
 
 
 # ---------- websocket handler ----------
@@ -355,6 +388,9 @@ async def websocket_handler(request):
         # we *intended* to type into lets us write via AXValue/AXSelectedText
         # regardless of the system's focus state.
         'last_text_el': None,
+        # Last global cursor coords (updated on every mouse event) so wheel
+        # events can be hit-tested at the pointer, not at window center.
+        'last_cursor': None,
     }
 
     with objc.autorelease_pool():
@@ -389,20 +425,28 @@ async def websocket_handler(request):
             with objc.autorelease_pool():
                 win = get_win(state)
                 gx, gy = to_global(win, data['x'], data['y'])
+                state['last_cursor'] = (gx, gy)
                 cg_move(state['pid'], gx, gy)
 
         elif t == 'mouse_wheel':
             with objc.autorelease_pool():
                 win = get_win(state)
-                # Use last known cursor for hit-testing; we just sent a move,
-                # but the browser doesn't give us coords with the wheel event.
-                # Accept the ambiguity and hit-test at window center — for
-                # AX-scroll this is fine since we walk up to the scroll area.
-                x, y, w, h = win['bounds']
-                cx, cy = x + w * 0.5, y + h * 0.5
+                # Prefer explicit coords from the wheel event; fall back to
+                # the last mouse_move, then window center as a last resort.
+                if 'x' in data and 'y' in data:
+                    cx, cy = to_global(win, data['x'], data['y'])
+                elif state['last_cursor'] is not None:
+                    cx, cy = state['last_cursor']
+                else:
+                    x, y, w, h = win['bounds']
+                    cx, cy = x + w * 0.5, y + h * 0.5
                 el = hit_test(state['app_ax'], cx, cy)
-                if not try_ax_scroll(el, data['deltaY'], data['deltaX']):
-                    cg_scroll(state['pid'], data['deltaY'], data['deltaX'])
+                dy, dx = data['deltaY'], data['deltaX']
+                if try_ax_scroll(el, dy, dx):
+                    print(f'  AX scroll @ ({cx:.0f},{cy:.0f}) dy={dy} dx={dx}')
+                else:
+                    cg_scroll(state['pid'], dy, dx)
+                    print(f'  CG scroll @ ({cx:.0f},{cy:.0f}) dy={dy} dx={dx}')
 
         elif t == 'mouse_down':
             with objc.autorelease_pool():
@@ -462,6 +506,27 @@ async def websocket_handler(request):
                     ok = single_select_row(fresh)
                     print(f'  single_select {pc["role"]}: {ok} '
                           f'(selected={ax_get(fresh, "AXSelected")})')
+                elif pc['plan'] == 'select_row_attr':
+                    fresh = hit_test(state['app_ax'], gx, gy) or pc['el']
+                    # plan_click returned us an AXRow; walk there if we
+                    # re-hit something deeper.
+                    row = fresh
+                    while row is not None and ax_get(row, 'AXRole') != 'AXRow':
+                        row = ax_parent(row)
+                    if row is None:
+                        row = pc['el']
+                    # Prefer AXSelectedRows on the enclosing table — it
+                    # replaces the whole selection (won't multi-select).
+                    table = row
+                    while table is not None and ax_get(table, 'AXRole') not in ('AXTable', 'AXOutline', 'AXList'):
+                        table = ax_parent(table)
+                    ok = False
+                    if table is not None and _is_settable(table, 'AXSelectedRows'):
+                        ok = ax_set(table, 'AXSelectedRows', [row])
+                        print(f'  AXSelectedRows on {ax_get(table, "AXRole")}: {ok}')
+                    if not ok:
+                        ok = ax_set(row, 'AXSelected', True)
+                        print(f'  AXSelected on AXRow: {ok}')
                 # 'focus_text' already handled on down.
                 state['send_now'] = True
 
@@ -586,9 +651,16 @@ async def hello(request):
             }
             window.onkeydown = e => { e.preventDefault(); send({ type: 'key_down', key: e.key }) }
             window.onkeyup = e => { e.preventDefault(); send({ type: 'key_up', key: e.key }) }
-            document.addEventListener('mousewheel', e => {
+            portal.addEventListener('wheel', e => {
                 e.preventDefault()
-                send({ type: 'mouse_wheel', deltaY: e.deltaY, deltaX: e.deltaX })
+                let bb = portal.getBoundingClientRect()
+                send({
+                    type: 'mouse_wheel',
+                    x: (e.clientX - bb.x) / bb.width,
+                    y: (e.clientY - bb.y) / bb.height,
+                    deltaY: e.deltaY,
+                    deltaX: e.deltaX,
+                })
             }, { passive: false });
             ws.onclose = () => { document.body.innerHTML = "Please refresh the page (Socket closed)" }
             ws.onmessage = function (event) {
